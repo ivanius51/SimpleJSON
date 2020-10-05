@@ -1,3 +1,11 @@
+//------¬ --¬   --¬    --¬--¬   --¬ -----¬ ---¬   --¬--¬--¬   --¬-------¬-------¬ --¬
+//--ã==--¬L--¬ --ã-    --¦--¦   --¦--ã==--¬----¬  --¦--¦--¦   --¦--ã====---ã====----¦
+//------ã- L----ã-     --¦--¦   --¦-------¦--ã--¬ --¦--¦--¦   --¦-------¬-------¬L--¦
+//--ã==--¬  L--ã-      --¦L--¬ --ã---ã==--¦--¦L--¬--¦--¦--¦   --¦L====--¦L====--¦ --¦
+//------ã-   --¦       --¦ L----ã- --¦  --¦--¦ L----¦--¦L------ã--------¦-------¦ --¦
+//L=====-    L=-       L=-  L===-  L=-  L=-L=-  L===-L=- L=====- L======-L======- L=-
+//Script by Ivanius51 - http://GetScript.net          
+
 unit JSON;
 
 interface
@@ -16,12 +24,17 @@ Type
       FKey:String;
       FValue:String;
       FChildsList:TStringList;
+      FIsSimple : boolean;
 
       function GetIsNull: Boolean;
       function GetAsBool: Boolean;
       function GetAsInt: Integer;
       function GetAsDouble: Double;
       function GetCount: Integer;
+
+      procedure GetJSONBuf(var aStream:String; var aTabCount : integer);
+      procedure SetValue(const aValue : String);
+      procedure SetKey(const aKey : String);
     Public
       Constructor Create; Override; Overload;
       Constructor Create(aType : TJSONtype); Override; Overload;
@@ -32,9 +45,10 @@ Type
       procedure add(const aKey:string; aObject : TJSONObject);overload;
       
       Property SelfType : TJSONtype read FType;
-      Property Value : String Read FValue write FValue;
-      Property Name : String Read FKey write FKey;
+      Property Value : String Read FValue write SetValue;
+      Property Name : String Read FKey write SetKey;
       Property Count : Integer Read GetCount;
+      Property IsSimple : boolean Read FIsSimple;
 
       Property AsDouble: Double Read GetAsDouble;
       Property AsInt: Integer Read GetAsInt;
@@ -48,18 +62,48 @@ Type
       Property Field[const aKey : String]:TJSONObject Read GetField; default;
       Property Child[aIndex : Integer]:TJSONObject Read GetItem; default;
       
+      function GetJSON : AnsiString;
   end;
 
-  Function ParseJSON(old_pos:String):TJSONObject;
+  Function ParseJSON(aJSONString:String):TJSONObject;
 
 implementation
+
+const
+  JR_OBJ = 'Only TJSONlist or TJSONobject object can be assigned to TJSONbase';
+  JR_TYPE = 'Invalid data type assigned to TJSONbase';
+  JR_LIST_VALUE = 'TJSONlist does not have a value by itself - it is an indexed array';
+  JR_LIST_NAME = 'TJSONlist use only Integer indexes - not String';
+  JR_INDEX = 'Index (%d) is outside the array (%d)';
+  JR_NO_INDEX = 'TJSONbase is not an array and does not support indexes';
+  JR_NO_NAME = 'Associative arrays does not support empty index';
+  JR_OBJ_VALUE = 'TJSONobject does not have a value by itself - it is an indexed array';
+  JR_BAD_TXT = 'Unsupported data type in TJSONbase.Text';
+  JR_NO_COUNT = 'TJSONbase is not an array and does not have Count property';
+  JR_PARSE_CHAR = 'Unexpected character at position %d';
+  JR_PARSE_EMPTY = 'Empty element at position %d';
+  JR_OPEN_LIST = 'Missing closing ]';
+  JR_OPEN_OBJECT = 'Missing closing }';
+  JR_OPEN_STRING = 'Unterminated string at position %d';
+  JR_NO_COLON = 'Missing property name/value delimiter (:) at position %d';
+  JR_NO_VALUE = 'Missing property value at position %d';
+  JR_NO_COMMA = 'Missing comma at position %d';
+  JR_BAD_FLOAT = 'Missing fractional part of a floating-point number at position %d';
+  JR_BAD_EXPONENT = 'Exponent of the number is not integer at position %d';
+  JR_UNQUOTED = 'Unquoted property name at position %d';
+  JR_CONTROL = 'Control character (%d) encountered at position %d in %s';
+  JR_ESCAPE = 'Unrecognized escape sequence at position %d in "%s"';
+  JR_CODEPOINT = 'Invalid UNICODE escape sequence at position %d in "%s"';
+  JR_UNESCAPED = 'Unescaped symbol at position %d in "%s"';
+  JR_EMPTY_NAME = 'Empty property name at position %d';
 
 Constructor TJSONObject.Create; Override; Overload;
 Begin
   Inherited;
   FType:=jsNull;
-  FValue:='Null';
-  FKey:='Root';
+  FValue:='';
+  FKey:='';
+  FIsSimple:=true;
   FChildsList:=TStringList.Create;
 end;
 
@@ -80,6 +124,17 @@ Destructor TJSONObject.Destroy;
 Begin
   FChildsList.Free;
   Inherited;
+end;
+
+procedure TJSONObject.SetValue(const aValue : String);
+begin
+  FValue := aValue;
+end;
+
+procedure TJSONObject.SetKey(const aKey : String);
+begin
+  FKey := aKey;
+  FIsSimple := false;
 end;
 
 procedure TJSONObject.add(aObject : TJSONObject);overload;
@@ -123,6 +178,7 @@ begin
     result:=TJSONObject(FChildsList.Objects[index]);
   end else
   begin
+    print(Format('Try access key %s no exists.',[aKey]));
     //raise Exception.Create(Format('Try access key %s no exists.',[aKey]));
   end; 
 end;
@@ -140,6 +196,7 @@ function TJSONObject.GetIsNull: Boolean;
 begin
   result := (Ftype = jsNull) or (FValue = '');
 end;
+
 function TJSONObject.GetAsBool: Boolean;
 begin
   result := 
@@ -148,16 +205,125 @@ begin
   or ((Ftype = jsString) and (FValue <> '')) 
   or (Ftype <> jsNull);
 end;
+
 function TJSONObject.GetAsInt: Integer;
 begin
   result := StrToIntDef(FValue, 0);
 end;
+
 function TJSONObject.GetAsDouble: Double;
 begin
   result := StrToFloat(FValue);
 end;
 
-Function ParseJSON(old_pos:String):TJSONObject;
+function TJSONobject.GetJSON : String;
+Var
+  Buf:String;
+  tabCount:Integer;
+Begin
+  Buf:=('');
+  try
+    tabCount:=0;
+    GetJSONBuf(Buf, tabCount);
+    Result:=Buf;
+  Finally
+  end;
+end;
+
+procedure addCodeStyle(var aStream:String; var aTabCount : integer);
+var
+  i:Integer;
+begin
+  aStream:=aStream+#13#10;
+  for i:=1 to aTabCount do
+    aStream:=aStream+#9;
+end;
+
+procedure TJSONobject.GetJSONBuf(var aStream:String; var aTabCount : integer);
+var
+  i:Integer;
+  currentIt : TJSONobject;
+Begin
+  if (FType = jsObject) then
+  begin
+    if ( not IsSimple ) then
+    begin
+      addCodeStyle(aStream, aTabCount);
+      aStream:=aStream+EscapeString(FKey)+':';
+      addCodeStyle(aStream, aTabCount);
+    end;
+    aStream:=aStream+'{';
+    inc(aTabCount);
+    for i:=0 to FChildsList.Count-1 Do
+    Begin
+      currentIt:=GetItem(i);
+      if ( FChildsList.Count > 1 ) then
+        addCodeStyle(aStream, aTabCount);
+      currentIt.GetJSONBuf(aStream, aTabCount);
+      If (i <> (FChildsList.Count-1)) then 
+        aStream:=aStream+',';
+    end;
+    dec(aTabCount);
+    if ( FChildsList.Count > 1 ) then
+      addCodeStyle(aStream, aTabCount);
+    aStream:=aStream+'}';
+  end else
+  if (FType = jsArray) then
+  begin
+    addCodeStyle(aStream, aTabCount);
+    aStream:=aStream+EscapeString(FKey)+':';
+    addCodeStyle(aStream, aTabCount);
+    aStream:=aStream+'[';
+    inc(aTabCount);
+    for i:=0 to FChildsList.Count-1 Do
+    Begin
+      currentIt:=GetItem(i);
+      addCodeStyle(aStream, aTabCount);
+      currentIt.GetJSONBuf(aStream, aTabCount);
+      If (i <> (FChildsList.Count-1)) then 
+        aStream:=aStream+',';
+    end;
+    dec(aTabCount);
+    addCodeStyle(aStream, aTabCount);
+    aStream:=aStream+']';
+  end else
+  begin
+    if ( not IsSimple ) then
+    begin
+      aStream:=aStream+EscapeString(FKey)+' : ';
+    end;  
+    if (FType = jsString) then
+    begin
+      aStream:=aStream+EscapeString(FValue);
+    end
+    else
+    begin
+      aStream:=aStream+FValue;
+    end;
+  end;
+end;
+
+  Function EscapeString(const aString : String): String;
+  var
+    i:Integer;
+  Begin
+    Result:='"';
+    For i:=1 to Length(aString) do
+      Case aString[i] Of
+        '/', '\', '"': Result:=Result + '\' + aString[i];
+        #8: Result:=Result+'\b';
+        #9: Result:=Result+'\t';
+        #10:Result:=Result+'\n';
+        #12:Result:=Result+'\f';
+        #13:Result:=Result+'\r';
+      Else
+        if aString[i] in [WideChar(' ') .. WideChar('~')] Then Result:=Result + aString[i]
+          else Result:=Result + '\u' + IntToHex(Ord(aString[i]),4)
+      end;
+    Result:=Result+'"';
+  end;
+
+Function ParseJSON(aJSONString:String):TJSONObject;
 var
   txt:String;
   txtpos:cardinal;
@@ -165,8 +331,10 @@ var
   Begin
     while
       ((txt[txtpos])=' ')
+      or ((txt[txtpos])=#8)
       or ((txt[txtpos])=#9)
       or ((txt[txtpos])=#10)
+      or ((txt[txtpos])=#12)
       or ((txt[txtpos])=#13)
     //in [#9, #10, #13, ' ']
     do
@@ -250,7 +418,7 @@ var
             if Not (txt[ptrpos] in ['0'..'9']) then
             Begin
               Result.Free;
-              //Raise TJSONError.CreateFmt(JR_BAD_FLOAT,[txt-old_pos]);
+              Raise Exception.Create(format(JR_BAD_FLOAT,[txtpos]));
             end;
             While txt[ptrpos] in ['0'..'9'] do Inc(ptrpos); // rational part
           end;
@@ -261,13 +429,13 @@ var
             if not (txt[ptrpos] in ['-','+','0'..'9']) then
             Begin
               Result.Free;
-              //Raise TJSONError.CreateFmt(JR_BAD_EXPONENT,[txt-old_pos]);
+              Raise Exception.Create(format(JR_BAD_EXPONENT,[txtpos]));
             end;
             If txt[ptrpos] in ['+','-'] Then Inc(ptrpos); // exponent sign
             if not (txt[ptrpos] in ['0'..'9']) then
             Begin
               Result.Free;
-              //Raise TJSONError.CreateFmt(JR_BAD_EXPONENT,[txt-old_pos]);
+              Raise Exception.Create(format(JR_BAD_EXPONENT,[txtpos]));
             end;
             While txt[ptrpos] in ['0'..'9'] do Inc(ptrpos); // exponent
           end;
@@ -314,7 +482,7 @@ var
       if txt[txtpos] = #0 then
       Begin
         Result.Free;
-        //Raise TJSONError.CreateFmt(JR_OPEN_LIST,[txt-old_pos]);
+        Raise Exception.Create(format(JR_OPEN_LIST,[txtpos]));
       end;
       Case txt[txtpos] Of
         ']':
@@ -322,7 +490,7 @@ var
             If need_value then
             Begin
               Result.Free;
-              //Raise TJSONError.CreateFmt(JR_PARSE_EMPTY,[txt-old_pos]);
+              Raise Exception.Create(format(JR_PARSE_EMPTY,[txtpos]));
             End;
             //Inc(txtpos);//???
             need_comma:=False;
@@ -333,7 +501,7 @@ var
             if need_value or (Result.Count=0) then
             Begin
               Result.Free;
-              //Raise TJSONError.CreateFmt(JR_PARSE_EMPTY,[txt-old_pos]);
+              Raise Exception.Create(format(JR_PARSE_EMPTY,[txtpos]));
             end;
             Inc(txtpos);
             need_value:=True;
@@ -343,7 +511,7 @@ var
         if need_comma then
         Begin
           Result.Free;
-          //Raise TJSONError.CreateFmt(JR_NO_COMMA,[txt-old_pos]);
+          Raise Exception.Create(format(JR_NO_COMMA,[txtpos]));
         end
         else
         Begin
@@ -351,7 +519,7 @@ var
           If not Assigned(Elem) then
           Begin
             Result.Free;
-            //Raise TJSONError.CreateFmt(JR_PARSE_EMPTY,[txt-old_pos]);
+            Raise Exception.Create(format(JR_PARSE_EMPTY,[txtpos]));
           end;
           Result.Add(Elem);
           need_value:=False;
@@ -380,10 +548,10 @@ var
       s:=copy(txt,txtpos,L);
       //engine.msg('ParseName',s);
       Result:=s;
-      //Raise TJSONError.CreateFmt(JR_EMPTY_NAME,[txt-old_pos]);}
+      //Raise Exception.Create(format(JR_EMPTY_NAME,[txtpos]));
       txtpos:=ptrpos+1;
     End;
-    //Else //Raise TJSONError.CreateFmt(JR_UNQUOTED,[txt-old_pos]);
+    //Else Raise Exception.Create(format(JR_UNQUOTED,[txtpos]));
   end;
 
   function ParseObject:TJSONObject; // does not consume closing }
@@ -401,18 +569,16 @@ var
       SkipSpace;
       if txt[txtpos] = #0 then
       Begin
-        Result.Free;
-        Raise;
-        //Raise TJSONError.CreateFmt(JR_OPEN_LIST,[txt-old_pos]);
+        Result.Free;        
+        Raise Exception.Create(format(JR_OPEN_LIST,[txtpos]));
       end;
       Case txt[txtpos] Of
         '}':
           Begin
             If need_value then
             Begin
-              Result.Free;
-              Raise;
-              //Raise TJSONError.CreateFmt(JR_PARSE_EMPTY,[txt-old_pos]);
+              Result.Free;              
+              Raise Exception.Create(format(JR_PARSE_EMPTY,[txtpos]));
             end;
             //Inc(txtpos);
             need_comma:=False;
@@ -424,9 +590,8 @@ var
               or (Result.Count=0) 
             then
             Begin
-              Result.Free;
-              Raise;
-              //Raise TJSONError.CreateFmt(JR_PARSE_EMPTY,[txt-old_pos]);
+              Result.Free;              
+              Raise Exception.Create(format(JR_PARSE_EMPTY,[txtpos]));
             end;
             Inc(txtpos);
             need_value:=True;
@@ -435,9 +600,8 @@ var
       else
         if need_comma then
         Begin
-          Result.Free;
-          Raise;
-          //Raise TJSONError.CreateFmt(JR_NO_COMMA,[txt-old_pos]);
+          Result.Free;          
+          Raise Exception.Create(format(JR_NO_COMMA,[txtpos]));
         end
         else
         Begin
@@ -446,24 +610,21 @@ var
           SkipSpace;
           If txt[txtpos] <> ':' then
           Begin
-            Result.Free;
-            Raise;
-            //Raise TJSONError.CreateFmt(JR_NO_COLON,[txt-old_pos]);
+            Result.Free;            
+            Raise Exception.Create(format(JR_NO_COLON,[txtpos]));
           end;
           Inc(txtpos);
           SkipSpace;
           if txt[txtpos] in [',','}'] then
           Begin
-            Result.Free;
-            Raise;
-            //Raise TJSONError.CreateFmt(JR_NO_VALUE,[txt-old_pos]);
+            Result.Free;            
+            Raise Exception.Create(format(JR_NO_VALUE,[txtpos]));
           end;
           Elem:=ParseBase;
           If not Assigned(Elem) then
           Begin
-            Result.Free;
-            Raise;
-            //Raise TJSONError.CreateFmt(JR_PARSE_EMPTY,[txt-old_pos]);
+            Result.Free;            
+            Raise Exception.Create(format(JR_PARSE_EMPTY,[txtpos]));
           end else
           begin
             Result.Add(Title,Elem);
@@ -492,9 +653,8 @@ var
             SkipSpace;
             if txt[txtpos] <> '}' then
             Begin
-              Result.Free;
-              Raise;
-              //Raise TJSONError.CreateFmt(JR_OPEN_OBJECT,[txt-old_pos]);
+              Result.Free;              
+              Raise Exception.Create(format(JR_OPEN_OBJECT,[txtpos]));
             end;
             Inc(txtpos);
             Break;
@@ -506,17 +666,16 @@ var
             SkipSpace;
             if txt[txtpos] <> ']' then
             Begin
-              Result.Free;
-              Raise;
-              //Raise TJSONError.CreateFmt(JR_OPEN_LIST,[txt-old_pos]);
+              Result.Free;              
+              Raise Exception.Create(format(JR_OPEN_LIST,[txtpos]));
             end;
             Inc(txtpos);
             Break;
           end;
       Else
         Result.Free;
+        Raise Exception.Create(format(JR_PARSE_CHAR,[txtpos,txt]));
         break;        
-        //Raise TJSONError.CreateFmt(JR_PARSE_CHAR,[txt-old_pos,txt]);
       end;
     end;
   end;
@@ -524,7 +683,7 @@ var
 Begin
   txtpos:=1;
   //print(txtpos);
-  txt:=old_pos;
+  txt:=aJSONString;
   Result:=Nil;
   if (txt<>'') then
   try
@@ -533,14 +692,25 @@ Begin
     If txt[txtpos] <> #0 Then
     begin
       Result.Free;
-      //Raise TJSONError.CreateFmt(JR_PARSE_CHAR,[txt-old_pos,txt]);
+      Raise Exception.Create(format(JR_PARSE_CHAR,[txtpos,txt]));
     End;
   Except
     Result.Free;
-    Raise;
+    
   End;
 end;
 
-begin
+var
+  testJSON : TJSONObject;
 
+begin
+   with TSTRINGLIST.create do
+   try
+    loadfromfile('levels.json');
+    testJSON := parseJSON(text);
+   finally
+    free;
+   end;
+   print(testJSON.getJSON());
+   testJSON.free;
 end.
